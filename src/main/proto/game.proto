@@ -1,0 +1,208 @@
+syntax = "proto3";
+
+option java_package = "com.game.protobuf";
+option java_outer_classname = "GameProto";
+option csharp_namespace = "GameClient.Protobuf";
+
+// 消息类型枚举
+enum MessageType {
+    LOGIN_REQUEST = 0;
+    LOGIN_RESPONSE = 1;
+    REGISTER_REQUEST = 2;
+    REGISTER_RESPONSE = 3;
+    CREATE_ROOM_REQUEST = 4;
+    CREATE_ROOM_RESPONSE = 5;
+    JOIN_ROOM_REQUEST = 6;
+    JOIN_ROOM_RESPONSE = 7;
+    LEAVE_ROOM_REQUEST = 8;
+    LEAVE_ROOM_RESPONSE = 9;
+    LIST_ROOMS_REQUEST = 10;
+    LIST_ROOMS_RESPONSE = 11;
+    START_GAME_REQUEST = 12;
+    START_GAME_RESPONSE = 13;
+    MOVE_REQUEST = 14;
+    MOVE_RESPONSE = 15;
+    GAME_STATE_UPDATE = 16;
+    GAME_OVER = 17;
+    ERROR = 18;
+}
+
+// 错误码
+enum ErrorCode {
+    SUCCESS = 0;
+    USERNAME_PASSWORD_ERROR = 1;
+    USERNAME_EXISTS = 2;
+    ROOM_NOT_FOUND = 3;
+    ROOM_FULL = 4;
+    INVALID_REQUEST = 5;
+    INTERNAL_ERROR = 6;
+}
+
+// 登录请求
+message LoginRequest {
+    string username = 1;
+    string password = 2;
+}
+
+// 登录响应
+message LoginResponse {
+    ErrorCode code = 1;
+    string message = 2;
+    PlayerInfo player_info = 3;
+}
+
+// 注册请求
+message RegisterRequest {
+    string username = 1;
+    string password = 2;
+    string nickname = 3;
+}
+
+// 注册响应
+message RegisterResponse {
+    ErrorCode code = 1;
+    string message = 2;
+    PlayerInfo player_info = 3;
+}
+
+// 创建房间请求
+message CreateRoomRequest {
+    int64 player_id = 1;
+}
+
+// 创建房间响应
+message CreateRoomResponse {
+    ErrorCode code = 1;
+    string message = 2;
+    RoomInfo room_info = 3;
+}
+
+// 加入房间请求
+message JoinRoomRequest {
+    string room_code = 1;
+    int64 player_id = 2;
+}
+
+// 加入房间响应
+message JoinRoomResponse {
+    ErrorCode code = 1;
+    string message = 2;
+    RoomInfo room_info = 3;
+}
+
+// 离开房间请求
+message LeaveRoomRequest {
+    string room_code = 1;
+    int64 player_id = 2;
+}
+
+// 离开房间响应
+message LeaveRoomResponse {
+    ErrorCode code = 1;
+    string message = 2;
+}
+
+// 列出房间请求
+message ListRoomsRequest {
+}
+
+// 列出房间响应
+message ListRoomsResponse {
+    ErrorCode code = 1;
+    string message = 2;
+    repeated RoomInfo rooms = 3;
+}
+
+// 开始游戏请求
+message StartGameRequest {
+    int64 room_id = 1;
+    int64 player_id = 2;
+}
+
+// 开始游戏响应
+message StartGameResponse {
+    ErrorCode code = 1;
+    string message = 2;
+}
+
+// 移动请求
+message MoveRequest {
+    int64 room_id = 1;
+    int64 player_id = 2;
+    float x = 3;
+    float y = 4;
+}
+
+// 移动响应
+message MoveResponse {
+    ErrorCode code = 1;
+    string message = 2;
+}
+
+// 游戏状态更新
+message GameStateUpdate {
+    int64 room_id = 1;
+    repeated PlayerPosition players = 2;
+}
+
+// 游戏结束
+message GameOver {
+    int64 room_id = 1;
+    int64 winner_id = 2;
+}
+
+// 错误消息
+message ErrorMessage {
+    ErrorCode code = 1;
+    string message = 2;
+}
+
+// 玩家信息
+message PlayerInfo {
+    int64 id = 1;
+    string username = 2;
+    string nickname = 3;
+    int32 score = 4;
+}
+
+// 房间信息
+message RoomInfo {
+    int64 id = 1;
+    string room_code = 2;
+    int32 status = 3;
+    PlayerInfo player1 = 4;
+    PlayerInfo player2 = 5;
+}
+
+// 玩家位置
+message PlayerPosition {
+    int64 player_id = 1;
+    float x = 2;
+    float y = 3;
+}
+
+// 统一消息包装器
+message GameMessage {
+    MessageType type = 1;
+    oneof body {
+        LoginRequest login_request = 2;
+        LoginResponse login_response = 3;
+        RegisterRequest register_request = 4;
+        RegisterResponse register_response = 5;
+        CreateRoomRequest create_room_request = 6;
+        CreateRoomResponse create_room_response = 7;
+        JoinRoomRequest join_room_request = 8;
+        JoinRoomResponse join_room_response = 9;
+        LeaveRoomRequest leave_room_request = 10;
+        LeaveRoomResponse leave_room_response = 11;
+        ListRoomsRequest list_rooms_request = 12;
+        ListRoomsResponse list_rooms_response = 13;
+        StartGameRequest start_game_request = 14;
+        StartGameResponse start_game_response = 15;
+        MoveRequest move_request = 16;
+        MoveResponse move_response = 17;
+        GameStateUpdate game_state_update = 18;
+        GameOver game_over = 19;
+        ErrorMessage error = 20;
+    }
+}
