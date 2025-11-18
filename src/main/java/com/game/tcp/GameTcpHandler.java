@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @Component
 public class GameTcpHandler implements Handler<NetSocket> {
@@ -22,20 +23,66 @@ public class GameTcpHandler implements Handler<NetSocket> {
     @Autowired
     private GameRoomService gameRoomService;
 
+    // 存储每个连接的消息缓冲区
+    private final Map<NetSocket, Buffer> receiveBuffers = new ConcurrentHashMap<>();
+    
     @Override
     public void handle(NetSocket socket) {
         log.info("New connection established from {}", socket.remoteAddress());
-        // 读取消息前的处理
+        // 为每个连接初始化缓冲区
+        receiveBuffers.put(socket, Buffer.buffer());
+        
+        // 读取消息前的处理（基于长度前缀）
         socket.handler(buffer -> {
             try {
-                log.debug("Received message with length: {}", buffer.length());
-                // 解析Protobuf消息
-                GameProto.GameMessage message = GameProto.GameMessage.parseFrom(buffer.getBytes());
-                log.info("Processing message type: {}", message.getType());
-                handleMessage(socket, message);
+                Buffer receiveBuffer = receiveBuffers.get(socket);
+                receiveBuffer.appendBuffer(buffer);
+                
+                // 循环处理所有完整的消息
+                while (true) {
+                    // 检查是否有足够的数据读取长度前缀
+                    if (receiveBuffer.length() < 4) {
+                        break; // 数据不足，等待更多数据
+                    }
+                    
+                    // 读取4字节长度前缀（小端序）
+                    int messageLength = receiveBuffer.getIntLE(0);
+                    log.info("Received message length prefix: {}", messageLength);
+                    
+                    // 验证消息长度是否合理
+                    if (messageLength <= 0 || messageLength > 1024 * 1024) { // 限制最大1MB
+                        log.error("Invalid message length: {}", messageLength);
+                        receiveBuffers.put(socket, Buffer.buffer()); // 替换为新的空缓冲区
+                        break;
+                    }
+                    int totalRequiredLength = 4 + messageLength;
+                    // 检查是否有足够的数据读取完整消息
+                    if (receiveBuffer.length() < 4 + messageLength) {
+                        break; // 数据不足，等待更多数据
+                    }
+                    
+                    // 提取消息内容
+                    byte[] messageBytes = receiveBuffer.getBytes(4, totalRequiredLength);
+                    // 移除已处理的数据 - 在Vert.x中创建新的缓冲区，保留剩余的数据
+                    if (receiveBuffer.length() > 4 + messageLength) {
+                        Buffer remainingBuffer = Buffer.buffer();
+                        remainingBuffer.appendBuffer(receiveBuffer.getBuffer(4 + messageLength, receiveBuffer.length()));
+                        receiveBuffers.put(socket, remainingBuffer);
+                        receiveBuffer = remainingBuffer;
+                    } else {
+                        receiveBuffers.put(socket, Buffer.buffer()); // 全部处理完，清空缓冲区
+                        receiveBuffer =Buffer.buffer();
+                    }
+                    
+                    // 解析Protobuf消息
+                    GameProto.GameMessage message = GameProto.GameMessage.parseFrom(messageBytes);
+                    log.info("Processing message type: {}", message.getType());
+                    handleMessage(socket, message);
+                }
             } catch (Exception e) {
                 log.error("Error parsing message: {}", e.getMessage());
                 sendErrorMessage(socket, GameProto.ErrorCode.INVALID_REQUEST, "消息格式错误");
+                receiveBuffers.put(socket, Buffer.buffer()); // 替换为新的空缓冲区防止粘连问题
             }
         });
 
@@ -43,12 +90,14 @@ public class GameTcpHandler implements Handler<NetSocket> {
         socket.closeHandler(v -> {
             log.info("Connection closed from {}", socket.remoteAddress());
             sessionManager.removeSession(socket);
+            receiveBuffers.remove(socket); // 清理缓冲区
         });
 
         // 连接异常时的处理
         socket.exceptionHandler(e -> {
             log.error("Connection error from {}: {}", socket.remoteAddress(), e.getMessage());
             sessionManager.removeSession(socket);
+            receiveBuffers.remove(socket); // 清理缓冲区
         });
     }
 
@@ -262,7 +311,7 @@ public class GameTcpHandler implements Handler<NetSocket> {
 
     private void handleMove(NetSocket socket, GameProto.MoveRequest request) {
         Long playerId = request.getPlayerId();
-        log.debug("Player {} move request: position({},{}) in room: {}", 
+        log.info("Player {} move request: position({},{}) in room: {}", 
                   playerId, request.getX(), request.getY(), request.getRoomId());
         if (sessionManager.isPlayerOnline(playerId)) {
             // 创建位置更新消息
@@ -318,7 +367,7 @@ public class GameTcpHandler implements Handler<NetSocket> {
 
     private void notifyRoomPlayers(Long roomId, GameProto.MessageType messageType, Object messageBody) {
         Map<Long, NetSocket> players = sessionManager.getRoomPlayers(roomId);
-        log.debug("Notifying {} players in room {} about message type: {}", 
+        log.info("Notifying {} players in room {} about message type: {}", 
                   players.size(), roomId, messageType);
         for (NetSocket playerSocket : players.values()) {
             sendMessage(playerSocket, messageType, messageBody);
@@ -328,7 +377,6 @@ public class GameTcpHandler implements Handler<NetSocket> {
     private void sendMessage(NetSocket socket, GameProto.MessageType messageType, Object messageBody) {
         GameProto.GameMessage.Builder messageBuilder = GameProto.GameMessage.newBuilder()
                 .setType(messageType);
-        log.info("send message: {}", messageBuilder.build());
 
         // 根据消息类型设置相应的消息体
         switch (messageType) {
@@ -361,9 +409,19 @@ public class GameTcpHandler implements Handler<NetSocket> {
                 break;
         }
         
-        // 序列化并发送消息
-        byte[] bytes = messageBuilder.build().toByteArray();
-        socket.write(Buffer.buffer(bytes));
+        // 序列化消息
+        GameProto.GameMessage message = messageBuilder.build();
+        log.info("Sending message: {}", message.getType());
+        byte[] bytes = message.toByteArray();
+        
+        // 创建包含长度前缀的缓冲区（小端序）
+        Buffer buffer = Buffer.buffer(4 + bytes.length);
+        buffer.appendIntLE(bytes.length); // 添加4字节长度前缀
+        buffer.appendBytes(bytes); // 添加消息内容
+        
+        // 发送消息
+        socket.write(buffer);
+        log.info("Message sent successfully, length: {}", bytes.length);
     }
 
     private void sendErrorMessage(NetSocket socket, GameProto.ErrorCode errorCode, String message) {

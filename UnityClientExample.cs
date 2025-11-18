@@ -23,6 +23,10 @@ public class UnityClientExample : MonoBehaviour
     private Vector3 playerPosition = new Vector3(0, 0, 0);
     private Vector3 opponentPosition = new Vector3(0, 0, 0);
     
+    // 游戏物体引用
+    public GameObject playerObject; // 玩家方块
+    public GameObject opponentObject; // 对手方块
+    
     // UI引用
     public UnityEngine.UI.Text statusText;
     public UnityEngine.UI.InputField usernameInput;
@@ -40,7 +44,6 @@ public class UnityClientExample : MonoBehaviour
     {
         // 处理键盘输入，控制方块移动
         
-        
          // 使用isConnected替代isGameStarted，这样连接后就能测试移动
         {
             float horizontal = Input.GetAxis("Horizontal");
@@ -57,6 +60,16 @@ public class UnityClientExample : MonoBehaviour
                 playerPosition = newPosition;
                 SendMoveRequest(playerPosition.x, playerPosition.z);
             }
+        }
+        
+        // 更新游戏物体的位置
+        if (playerObject != null)
+        {
+            playerObject.transform.position = playerPosition;
+        }
+        if (opponentObject != null)
+        {
+            opponentObject.transform.position = opponentPosition;
         }
     }
     
@@ -111,10 +124,12 @@ public class UnityClientExample : MonoBehaviour
         UpdateStatus("已断开连接");
     }
     
-    // 接收消息
+    // 接收消息（基于长度前缀）
     private void ReceiveMessages()
     {
-        byte[] buffer = new byte[4096];
+        byte[] receiveBuffer = new byte[4096];
+        byte[] lengthBuffer = new byte[4];
+        int receivedLength = 0;
         
         while (isConnected)
         {
@@ -122,14 +137,51 @@ public class UnityClientExample : MonoBehaviour
             {
                 if (stream.DataAvailable)
                 {
-                    int bytesRead = stream.Read(buffer, 0, buffer.Length);
-                    if (bytesRead > 0)
+                    // 先读取4字节长度前缀
+                    if (receivedLength < 4)
                     {
-                        byte[] messageBytes = new byte[bytesRead];
-                        Array.Copy(buffer, messageBytes, bytesRead);
+                        int bytesToRead = 4 - receivedLength;
+                        int read = stream.Read(lengthBuffer, receivedLength, bytesToRead);
+                        receivedLength += read;
                         
-                        // 解析消息
-                        ParseMessage(messageBytes);
+                        // 如果长度前缀读取完成
+                        if (receivedLength == 4)
+                        {
+                            // 解析消息长度
+                            int messageLength = BitConverter.ToInt32(lengthBuffer, 0);
+                            Debug.Log("接收消息长度: " + messageLength);
+                            
+                            // 确保缓冲区足够大
+                            if (receiveBuffer.Length < messageLength)
+                            {
+                                receiveBuffer = new byte[messageLength];
+                            }
+                            
+                            // 读取消息内容
+                            int bytesRead = 0;
+                            while (bytesRead < messageLength)
+                            {
+                                int readSize = stream.Read(receiveBuffer, bytesRead, messageLength - bytesRead);
+                                if (readSize <= 0)
+                                {
+                                    break; // 连接关闭
+                                }
+                                bytesRead += readSize;
+                            }
+                            
+                            // 消息接收完成
+                            if (bytesRead == messageLength)
+                            {
+                                byte[] messageBytes = new byte[messageLength];
+                                Array.Copy(receiveBuffer, messageBytes, messageLength);
+                                
+                                // 解析消息
+                                ParseMessage(messageBytes);
+                            }
+                            
+                            // 重置状态，准备接收下一条消息
+                            receivedLength = 0;
+                        }
                     }
                 }
                 
@@ -143,16 +195,20 @@ public class UnityClientExample : MonoBehaviour
         }
     }
     
-    // 发送消息
+    // 发送消息（添加长度前缀）
     private void SendMessage(GameMessage message)
     {
-        debug.Log("发送消息: " + message.Type);
+        Debug.Log("发送消息: " + message.Type);
         if (isConnected)
         {
             try
             {
                 byte[] bytes = message.ToByteArray();
+                // 添加4字节长度前缀（小端序）
+                byte[] lengthBytes = BitConverter.GetBytes(bytes.Length);
+                stream.Write(lengthBytes, 0, lengthBytes.Length);
                 stream.Write(bytes, 0, bytes.Length);
+                Debug.Log("消息发送成功，长度: " + bytes.Length);
             }
             catch (Exception e)
             {
